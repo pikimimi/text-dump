@@ -1,0 +1,39 @@
+I need to create a new Next.js project for a music artwork app. My setup:
+
+macOS
+Latest stable Node.js and npm
+Preference for minimal manual typing
+
+Please provide a comprehensive guide with:
+
+Exact terminal commands to:
+
+Create a Next.js project with TypeScript and App Router
+Set up Tailwind CSS
+Install and configure shadcn/ui using the latest method:
+
+Use 'npx shadcn@latest init' to initialize the project
+Use 'npx shadcn@latest add [component]' to add components
+
+
+
+
+Complete, copy-pastable code for all necessary files, including but not limited to:
+
+next.config.js
+tailwind.config.js
+tsconfig.json
+app/layout.tsx
+app/page.tsx
+components/MusicArtworkApp.tsx
+Any required shadcn/ui component files
+
+
+Full project directory structure
+Instructions for handling npm audit warnings or errors
+Explanation of each step's purpose
+
+Ensure all code snippets are full and self-contained, requiring no additional typing. Format code blocks for easy copying.
+After the setup, the project should be immediately runnable with 'npm run dev'.
+If any step has multiple approaches, please explain briefly and recommend the best option for a beginner-friendly, maintainable setup.
+Please confirm you understand the updated shadcn setup process and will use the new commands in your instructions.
