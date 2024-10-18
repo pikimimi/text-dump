@@ -1,0 +1,447 @@
+"use client";
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { X, Camera } from 'lucide-react';
+import html2canvas from 'html2canvas';
+
+// Updated Layer interface
+interface Layer {
+  id: number;
+  type: 'text' | 'image';
+  content: string;
+  position: { x: number; y: number };
+  fontSize: number;
+  color: string;
+  visible: boolean;
+  zIndex: number;
+  width: number;
+  height: number;
+  isEditing?: boolean;
+}
+
+interface Artwork {
+  background: string;
+  layers: Layer[];
+}
+
+interface Template {
+  id: number;
+  name: string;
+  background: string;
+}
+
+interface MusicMetadata {
+  title: string;
+  artist: string;
+  album: string;
+}
+
+const MusicArtworkApp: React.FC = () => {
+  // State declarations (unchanged)
+  const [artwork, setArtwork] = useState<Artwork>({
+    background: '#ffffff',
+    layers: [],
+  });
+  const [isBorderVisible, setIsBorderVisible] = useState<boolean>(true);
+  const [borderColor, setBorderColor] = useState<string>('#00ff00');
+  const [selectedLayer, setSelectedLayer] = useState<Layer | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isResizing, setIsResizing] = useState<boolean>(false);
+  const [resizeCorner, setResizeCorner] = useState<string>('');
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [templates] = useState<Template[]>([
+    { id: 1, name: 'Minimal', background: '#f0f0f0' },
+    { id: 2, name: 'Vibrant', background: '#ff4500' },
+    { id: 3, name: 'Dark', background: '#1a1a1a' },
+  ]);
+  const [musicMetadata, setMusicMetadata] = useState<MusicMetadata>({
+    title: '',
+    artist: '',
+    album: '',
+  });
+  const [history, setHistory] = useState<Artwork[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const [aiPrompt, setAiPrompt] = useState<string>('');
+  const [imageCounter, setImageCounter] = useState<number>(0);
+  const [editingText, setEditingText] = useState<string>('');
+  const [isCenterCircleVisible, setIsCenterCircleVisible] = useState<boolean>(true);
+  const [centerCircleColor, setCenterCircleColor] = useState<string>('#000000');
+  const [centerCircleSize, setCenterCircleSize] = useState<number>(20);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const artworkContainerRef = useRef<HTMLDivElement>(null);
+
+  // Function to calculate font size based on text content and element dimensions
+  const calculateFontSize = (text: string, width: number, height: number): number => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return 16; // Default font size
+
+    let fontSize = 1;
+    context.font = `${fontSize}px Arial`;
+
+    while (context.measureText(text).width < width && fontSize < height) {
+      fontSize++;
+      context.font = `${fontSize}px Arial`;
+    }
+
+    return fontSize - 1; // Subtract 1 to ensure text fits within bounds
+  };
+
+  // Updated addLayer function
+  const addLayer = (type: 'text' | 'image', content: string) => {
+    const newLayer: Layer = {
+      id: Date.now(),
+      type,
+      content: type === 'text' ? 'New Text' : content,
+      position: { x: 230, y: 230 },
+      fontSize: 16,
+      color: '#000000',
+      visible: true,
+      zIndex: artwork.layers.length,
+      width: type === 'text' ? 100 : 100, // Initial width for text and image
+      height: type === 'text' ? 50 : 100, // Initial height for text and image
+      isEditing: type === 'text',
+    };
+    const newLayers = [...artwork.layers, newLayer];
+    updateArtwork({ layers: newLayers });
+    setSelectedLayer(newLayer);
+    if (type === 'text') {
+      setEditingText('New Text');
+    }
+  };
+
+  // Other helper functions (unchanged)
+  const updateArtwork = useCallback((changes: Partial<Artwork>) => {
+    setArtwork(prev => {
+      const newArtwork = { ...prev, ...changes };
+      addToHistory(newArtwork);
+      return newArtwork;
+    });
+  }, []);
+
+  const addToHistory = useCallback((newArtwork: Artwork) => {
+    setHistory(prev => {
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(newArtwork);
+      setHistoryIndex(newHistory.length - 1);
+      return newHistory;
+    });
+  }, [historyIndex]);
+
+  const handleLayerEdit = useCallback((id: number, changes: Partial<Layer>) => {
+    updateArtwork({
+      layers: artwork.layers.map(layer =>
+        layer.id === id ? { ...layer, ...changes } : layer
+      )
+    });
+    if (selectedLayer && selectedLayer.id === id) {
+      setSelectedLayer(prev => prev ? { ...prev, ...changes } : null);
+    }
+  }, [artwork.layers, selectedLayer, updateArtwork]);
+
+  // Updated handleTextEdit function
+  const handleTextEdit = (e: React.ChangeEvent<HTMLInputElement>, layerId: number) => {
+    const newContent = e.target.value;
+    setEditingText(newContent);
+    const layer = artwork.layers.find(l => l.id === layerId);
+    if (layer) {
+      const newFontSize = calculateFontSize(newContent, layer.width, layer.height);
+      handleLayerEdit(layerId, { content: newContent, fontSize: newFontSize });
+    }
+  };
+
+  const startEditingText = (layer: Layer) => {
+    setSelectedLayer(layer);
+    setEditingText(layer.content);
+    handleLayerEdit(layer.id, { isEditing: true });
+  };
+
+  const stopEditingText = (layerId: number) => {
+    handleLayerEdit(layerId, { isEditing: false });
+  };
+
+  // Updated handleMouseDown function
+  const handleMouseDown = useCallback((e: React.MouseEvent, layer: Layer) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'IMG' || (target.tagName === 'P' && !layer.isEditing)) {
+      setSelectedLayer(layer);
+      setIsDragging(true);
+      const rect = artworkContainerRef.current?.getBoundingClientRect();
+      if (rect) {
+        setDragStart({
+          x: e.clientX - rect.left - layer.position.x,
+          y: e.clientY - rect.top - layer.position.y
+        });
+      }
+      e.stopPropagation();
+    }
+  }, []);
+
+  // Updated handleCornerMouseDown function
+  const handleCornerMouseDown = useCallback((e: React.MouseEvent, corner: string, layer: Layer) => {
+    e.stopPropagation();
+    setIsResizing(true);
+    setResizeCorner(corner);
+    setSelectedLayer(layer);
+  }, []);
+
+  // Updated handleMouseMove function
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!artworkContainerRef.current || !selectedLayer) return;
+    
+    const rect = artworkContainerRef.current.getBoundingClientRect();
+
+    if (isDragging && dragStart) {
+      const newX = e.clientX - rect.left - dragStart.x;
+      const newY = e.clientY - rect.top - dragStart.y;
+      handleLayerEdit(selectedLayer.id, { position: { x: newX, y: newY } });
+    } else if (isResizing) {
+      const dx = e.clientX - rect.left - selectedLayer.position.x;
+      const dy = e.clientY - rect.top - selectedLayer.position.y;
+      let newWidth = selectedLayer.width;
+      let newHeight = selectedLayer.height;
+      let newX = selectedLayer.position.x;
+      let newY = selectedLayer.position.y;
+
+      switch (resizeCorner) {
+        case 'topLeft':
+          newWidth = selectedLayer.width - dx;
+          newHeight = selectedLayer.height - dy;
+          newX = e.clientX - rect.left;
+          newY = e.clientY - rect.top;
+          break;
+        case 'topRight':
+          newWidth = dx;
+          newHeight = selectedLayer.height - dy;
+          newY = e.clientY - rect.top;
+          break;
+        case 'bottomLeft':
+          newWidth = selectedLayer.width - dx;
+          newHeight = dy;
+          newX = e.clientX - rect.left;
+          break;
+        case 'bottomRight':
+          newWidth = dx;
+          newHeight = dy;
+          break;
+      }
+
+      // Ensure minimum size
+      newWidth = Math.max(20, newWidth);
+      newHeight = Math.max(20, newHeight);
+
+      if (selectedLayer.type === 'text') {
+        const newFontSize = calculateFontSize(selectedLayer.content, newWidth, newHeight);
+        handleLayerEdit(selectedLayer.id, {
+          position: { x: newX, y: newY },
+          width: newWidth,
+          height: newHeight,
+          fontSize: newFontSize
+        });
+      } else {
+        handleLayerEdit(selectedLayer.id, {
+          position: { x: newX, y: newY },
+          width: newWidth,
+          height: newHeight
+        });
+      }
+    }
+  }, [isDragging, isResizing, selectedLayer, handleLayerEdit, dragStart, resizeCorner]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setIsResizing(false);
+    setDragStart(null);
+  }, []);
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false);
+      setIsResizing(false);
+      setDragStart(null);
+    };
+
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, []);
+
+  // Other functions (handleAIAssist, applyTemplate, handleLayerDelete, handleLayerVisibilityToggle, undo, redo, closeEditLayer, toggleBorder, toggleCenterCircle, handleImageUpload, triggerFileInput, downloadArtwork) remain unchanged
+
+  // Main component render
+  return (
+    <div className="flex h-screen bg-gray-100">
+      {/* Left sidebar with tools */}
+      {/* ... (unchanged) */}
+      
+      {/* Main artwork display area */}
+      <div className="flex-1 p-4 overflow-auto flex justify-center items-center bg-gray-900">
+        <div 
+          id="artwork-container"
+          ref={artworkContainerRef}
+          style={{ 
+            width: '500px', 
+            height: '500px', 
+            position: 'relative',
+            backgroundColor: isBorderVisible ? borderColor : 'transparent',
+            padding: isBorderVisible ? '20px' : '0',
+          }}
+          className="shadow-lg"
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              overflow: 'hidden',
+              borderRadius: isBorderVisible ? '50%' : '0',
+            }}
+          >
+            {/* Background shape (circle or square) */}
+            <svg width="100%" height="100%" viewBox="0 0 460 460">
+              {isBorderVisible ? (
+                <circle
+                  cx="230"
+                  cy="230"
+                  r="230"
+                  fill={artwork.background}
+                  stroke="none"
+                />
+              ) : (
+                <rect
+                  x="0"
+                  y="0"
+                  width="460"
+                  height="460"
+                  fill={artwork.background}
+                  stroke="none"
+                />
+              )}
+            </svg>
+            {/* Layer container */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '0',
+                left: '0',
+                width: '100%',
+                height: '100%',
+                overflow: 'hidden',
+                borderRadius: isBorderVisible ? '50%' : '0',
+              }}
+            >
+              {/* Render visible layers */}
+              {artwork.layers.filter(layer => layer.visible).map(layer => (
+                <div
+                  key={layer.id}
+                  style={{
+                    position: 'absolute',
+                    left: `${layer.position.x}px`,
+                    top: `${layer.position.y}px`,
+                    cursor: layer.type === 'text' && !layer.isEditing ? 'pointer' : 'move',
+                    zIndex: layer.zIndex,
+                  }}
+                  onMouseDown={(e) => handleMouseDown(e, layer)}
+                >
+                  {layer.type === 'text' ? (
+                    layer.isEditing ? (
+                      <input
+                        type="text"
+                        value={editingText}
+                        onChange={(e) => handleTextEdit(e, layer.id)}
+                        onBlur={() => stopEditingText(layer.id)}
+                        autoFocus
+                        style={{
+                          fontSize: `${layer.fontSize}px`,
+                          color: layer.color,
+                          background: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          width: `${layer.width}width: `${layer.width}px`,
+                          height: `${layer.height}px`,
+                        }}
+                      />
+                    ) : (
+                      <p 
+                        style={{ 
+                          fontSize: `${layer.fontSize}px`, 
+                          color: layer.color,
+                          width: `${layer.width}px`,
+                          height: `${layer.height}px`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          margin: 0,
+                          padding: 0,
+                          overflow: 'hidden',
+                        }}
+                        onClick={() => startEditingText(layer)}
+                      >
+                        {layer.content}
+                      </p>
+                    )
+                  ) : (
+                    <img 
+                      src={layer.content} 
+                      alt={`Image ${layer.id}`} 
+                      style={{ 
+                        width: `${layer.width}px`, 
+                        height: `${layer.height}px`,
+                        userSelect: 'none',
+                      }} 
+                      draggable={false}
+                    />
+                  )}
+                  {/* Resize handles for both text and image */}
+                  {['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].map(corner => (
+                    <div
+                      key={corner}
+                      style={{
+                        position: 'absolute',
+                        [corner.includes('top') ? 'top' : 'bottom']: '-5px',
+                        [corner.includes('Left') ? 'left' : 'right']: '-5px',
+                        width: '10px',
+                        height: '10px',
+                        backgroundColor: 'white',
+                        border: '1px solid black',
+                        cursor: `${corner === 'topLeft' || corner === 'bottomRight' ? 'nwse' : 'nesw'}-resize`,
+                      }}
+                      onMouseDown={(e) => handleCornerMouseDown(e, corner, layer)}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+            {/* Center point indicator */}
+            {isCenterCircleVisible && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  width: `${centerCircleSize}px`,
+                  height: `${centerCircleSize}px`,
+                  borderRadius: '50%',
+                  backgroundColor: centerCircleColor,
+                  transform: 'translate(-50%, -50%)',
+                }}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MusicArtworkApp;
