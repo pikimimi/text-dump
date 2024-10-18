@@ -1,0 +1,561 @@
+"use client";
+import React, { useState, useCallback, useRef } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { X, Camera } from 'lucide-react';
+
+// Define interfaces for the component's data structures
+interface Layer {
+  id: number;
+  type: 'text' | 'image';
+  content: string;
+  position: { x: number; y: number };
+  fontSize: number;
+  color: string;
+  visible: boolean;
+  zIndex: number;
+}
+
+interface Artwork {
+  background: string;
+  layers: Layer[];
+}
+
+interface Template {
+  id: number;
+  name: string;
+  background: string;
+}
+
+interface MusicMetadata {
+  title: string;
+  artist: string;
+  album: string;
+}
+
+const MusicArtworkApp: React.FC = () => {
+  // State for the main artwork
+  const [artwork, setArtwork] = useState<Artwork>({
+    background: '#ffffff',
+    layers: [],
+  });
+  // State for UI elements and user interactions
+  const [isBorderVisible, setIsBorderVisible] = useState<boolean>(true);
+  const [borderColor, setBorderColor] = useState<string>('#00ff00');
+  const [selectedLayer, setSelectedLayer] = useState<Layer | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  // Predefined templates
+  const [templates] = useState<Template[]>([
+    { id: 1, name: 'Minimal', background: '#f0f0f0' },
+    { id: 2, name: 'Vibrant', background: '#ff4500' },
+    { id: 3, name: 'Dark', background: '#1a1a1a' },
+  ]);
+  // State for music metadata
+  const [musicMetadata, setMusicMetadata] = useState<MusicMetadata>({
+    title: '',
+    artist: '',
+    album: '',
+  });
+  // State for undo/redo functionality
+  const [history, setHistory] = useState<Artwork[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  // State for AI-assisted content generation
+  const [aiPrompt, setAiPrompt] = useState<string>('');
+
+  // Refs for file input and canvas
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Function to add a new layer to the artwork
+  const addLayer = (type: 'text' | 'image', content: string) => {
+    const newLayer: Layer = {
+      id: Date.now(),
+      type,
+      content,
+      position: { x: 230, y: 230 },
+      fontSize: 16,
+      color: '#000000',
+      visible: true,
+      zIndex: artwork.layers.length,
+    };
+    const newLayers = [...artwork.layers, newLayer];
+    updateArtwork({ layers: newLayers });
+    setSelectedLayer(newLayer);
+  };
+
+  // Function to update the artwork and add to history
+  const updateArtwork = useCallback((changes: Partial<Artwork>) => {
+    setArtwork(prev => {
+      const newArtwork = { ...prev, ...changes };
+      addToHistory(newArtwork);
+      return newArtwork;
+    });
+  }, []);
+
+  // Function to add current artwork state to history
+  const addToHistory = useCallback((newArtwork: Artwork) => {
+    setHistory(prev => {
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(newArtwork);
+      setHistoryIndex(newHistory.length - 1);
+      return newHistory;
+    });
+  }, [historyIndex]);
+
+  // Function to edit a specific layer
+  const handleLayerEdit = useCallback((id: number, changes: Partial<Layer>) => {
+    updateArtwork({
+      layers: artwork.layers.map(layer =>
+        layer.id === id ? { ...layer, ...changes } : layer
+      )
+    });
+    if (selectedLayer && selectedLayer.id === id) {
+      setSelectedLayer(prev => prev ? { ...prev, ...changes } : null);
+    }
+  }, [artwork.layers, selectedLayer, updateArtwork]);
+
+  // Event handlers for layer dragging
+  const handleMouseDown = useCallback((e: React.MouseEvent, layer: Layer) => {
+    setSelectedLayer(layer);
+    setIsDragging(true);
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isDragging && selectedLayer) {
+      const canvas = e.currentTarget as HTMLDivElement;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      handleLayerEdit(selectedLayer.id, { position: { x, y } });
+    }
+  }, [isDragging, selectedLayer, handleLayerEdit]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  // Function to handle AI-assisted content generation
+  const handleAIAssist = () => {
+    if (aiPrompt.trim() !== '') {
+      addLayer('text', aiPrompt);
+      setAiPrompt('');
+    }
+  };
+
+  // Function to apply a template
+  const applyTemplate = (template: Template) => {
+    updateArtwork({ background: template.background });
+  };
+
+  // Function to delete a layer
+  const handleLayerDelete = (id: number) => {
+    updateArtwork({ layers: artwork.layers.filter(layer => layer.id !== id) });
+    if (selectedLayer && selectedLayer.id === id) {
+      setSelectedLayer(null);
+    }
+  };
+
+  // Function to toggle layer visibility
+  const handleLayerVisibilityToggle = (id: number) => {
+    updateArtwork({
+      layers: artwork.layers.map(layer =>
+        layer.id === id ? { ...layer, visible: !layer.visible } : layer
+      )
+    });
+  };
+
+  // Undo function
+  const undo = () => {
+    if (historyIndex > 0) {
+      setHistoryIndex(prev => prev - 1);
+      setArtwork(history[historyIndex - 1]);
+    }
+  };
+
+  // Redo function
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      setHistoryIndex(prev => prev + 1);
+      setArtwork(history[historyIndex + 1]);
+    }
+  };
+
+  // Function to close the layer edit panel
+  const closeEditLayer = () => {
+    setSelectedLayer(null);
+  };
+
+  // Function to toggle border visibility
+  const toggleBorder = () => {
+    setIsBorderVisible(prev => !prev);
+  };
+
+  // Function to handle image upload
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          addLayer('image', img.src);
+        };
+        img.src = event.target.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Function to trigger file input click
+  const triggerFileInput = () => {
+    fileInputRef.current?.click();
+  };
+
+  // Function to download the artwork
+  const downloadArtwork = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Set canvas size
+    canvas.width = 500;
+    canvas.height = 500;
+
+    // Draw background
+    ctx.fillStyle = artwork.background;
+    if (isBorderVisible) {
+      ctx.beginPath();
+      ctx.arc(250, 250, 230, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(0, 0, 500, 500);
+    }
+
+    // Draw layers
+    artwork.layers.forEach(layer => {
+      if (layer.visible) {
+        if (layer.type === 'text') {
+          ctx.font = `${layer.fontSize}px Arial`;
+          ctx.fillStyle = layer.color;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(layer.content, layer.position.x, layer.position.y);
+        } else if (layer.type === 'image') {
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, layer.position.x - 50, layer.position.y - 50, 100, 100);
+          };
+          img.src = layer.content;
+        }
+      }
+    });
+
+    // Create download link
+    const link = document.createElement('a');
+    link.download = 'music-artwork.png';
+    link.href = canvas.toDataURL();
+    link.click();
+  };
+
+  // Main component render
+  return (
+    <div className="flex h-screen bg-gray-100">
+      {/* Left sidebar with tools */}
+      <div className="w-64 bg-white p-4 shadow-md overflow-auto">
+        <h2 className="text-xl font-bold mb-4">Tools</h2>
+        <Tabs defaultValue="elements" className="w-full">
+          <TabsList className="flex flex-wrap mb-4">
+            <TabsTrigger value="elements" className="flex-grow">Elements</TabsTrigger>
+            <TabsTrigger value="templates" className="flex-grow">Templates</TabsTrigger>
+            <TabsTrigger value="layers" className="flex-grow">Layers</TabsTrigger>
+            <TabsTrigger value="metadata" className="flex-grow">Metadata</TabsTrigger>
+          </TabsList>
+          {/* Elements tab content */}
+          <TabsContent value="elements" className="space-y-2">
+            <Button className="w-full" onClick={() => addLayer('text', 'New Text')}>
+              Add Text
+            </Button>
+            <Button className="w-full" onClick={triggerFileInput}>
+              <Camera className="mr-2 h-4 w-4" /> Upload Image
+            </Button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleImageUpload}
+              accept="image/*"
+              style={{ display: 'none' }}
+            />
+            {/* Background color picker */}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="w-full">
+                  Background Color
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Choose Background Color</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Input 
+                      type="color" 
+                      value={artwork.background} 
+                      onChange={(e) => updateArtwork({ background: e.target.value })} 
+                      className="w-full"
+                    />
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogAction>Close</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {/* Border color picker */}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="w-full">
+                  Border Color
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Choose Border Color</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Input 
+                      type="color" 
+                      value={borderColor} 
+                      onChange={(e) => setBorderColor(e.target.value)} 
+                      className="w-full"
+                    />
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogAction>Close</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {/* Toggle border visibility */}
+            <Button className="w-full" onClick={toggleBorder}>
+              {isBorderVisible ? 'Hide Border' : 'Show Border'}
+            </Button>
+            {/* AI Assist input and button */}
+            <Input 
+              placeholder="Enter AI prompt"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              className="mb-2"
+            />
+            <Button className="w-full" onClick={handleAIAssist}>
+              AI Assist
+            </Button>
+          </TabsContent>
+          {/* Templates tab content */}
+          <TabsContent value="templates" className="space-y-2">
+            {templates.map(template => (
+              <Button key={template.id} className="w-full" onClick={() => applyTemplate(template)}>
+                {template.name}
+              </Button>
+            ))}
+          </TabsContent>
+          {/* Layers tab content */}
+          <TabsContent value="layers" className="space-y-2">
+            {artwork.layers.map((layer) => (
+              <div key={layer.id} className="flex items-center justify-between bg-white p-2 rounded shadow">
+                <span>{layer.type} - {layer.content}</span>
+                <div>
+                  <Button onClick={() => handleLayerVisibilityToggle(layer.id)} size="sm">
+                    {layer.visible ? 'Hide' : 'Show'}
+                  </Button>
+                  <Button onClick={() => handleLayerDelete(layer.id)} size="sm" variant="destructive">
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </TabsContent>
+          {/* Metadata tab content */}
+          <TabsContent value="metadata" className="space-y-2">
+            <Input 
+              placeholder="Song Title" 
+              value={musicMetadata.title}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, title: e.target.value }))}
+            />
+            <Input 
+              placeholder="Artist Name" 
+              value={musicMetadata.artist}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, artist: e.target.value }))}
+            />
+            <Input 
+              placeholder="Album Name" 
+              value={musicMetadata.album}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, album: e.target.value }))}
+            />
+          </TabsContent>
+        </Tabs>
+        {/* Export, Undo, and Redo buttons */}<div className="mt-4 space-y-2">
+          <Button className="w-full" onClick={downloadArtwork}>
+            Download Artwork
+          </Button>
+          <Button className="w-full" onClick={undo} disabled={historyIndex <= 0}>
+            Undo
+          </Button>
+          <Button className="w-full" onClick={redo} disabled={historyIndex >= history.length - 1}>
+            Redo
+          </Button>
+        </div>
+      </div>
+      
+      {/* Main artwork display area */}
+      <div className="flex-1 p-4 overflow-auto flex justify-center items-center bg-gray-900">
+        <div 
+          style={{ 
+            width: '500px', 
+            height: '500px', 
+            position: 'relative',
+            backgroundColor: isBorderVisible ? borderColor : 'transparent',
+            padding: isBorderVisible ? '20px' : '0',
+          }}
+          className="shadow-lg"
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              overflow: 'hidden',
+              borderRadius: isBorderVisible ? '50%' : '0', // Apply circular shape only when border is visible
+            }}
+          >
+            {/* Background shape (circle or square) */}
+            <svg width="100%" height="100%" viewBox="0 0 460 460">
+              {isBorderVisible ? (
+                <circle
+                  cx="230"
+                  cy="230"
+                  r="230"
+                  fill={artwork.background}
+                  stroke="none"
+                />
+              ) : (
+                <rect
+                  x="0"
+                  y="0"
+                  width="460"
+                  height="460"
+                  fill={artwork.background}
+                  stroke="none"
+                />
+              )}
+            </svg>
+            {/* Layer container */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '0',
+                left: '0',
+                width: '100%',
+                height: '100%',
+                overflow: 'hidden',
+                borderRadius: isBorderVisible ? '50%' : '0', // Apply circular shape only when border is visible
+              }}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
+              {/* Render visible layers */}
+              {artwork.layers.filter(layer => layer.visible).map(layer => (
+                <div
+                  key={layer.id}
+                  style={{
+                    position: 'absolute',
+                    left: `${(layer.position.x / 460) * 100}%`,
+                    top: `${(layer.position.y / 460) * 100}%`,
+                    transform: 'translate(-50%, -50%)',
+                    cursor: 'move',
+                    zIndex: layer.zIndex,
+                  }}
+                  onMouseDown={(e) => handleMouseDown(e, layer)}
+                >
+                  {layer.type === 'text' ? (
+                    <p style={{ fontSize: `${layer.fontSize}px`, color: layer.color }}>{layer.content}</p>
+                  ) : (
+                    <img src={layer.content} alt="User added" style={{ width: '100px', height: '100px' }} />
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* Center point indicator */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                width: '20px',
+                height: '20px',
+                borderRadius: '50%',
+                backgroundColor: 'black',
+                transform: 'translate(-50%, -50%)',
+              }}
+            />
+          </div>
+        </div>
+      </div>
+      
+      {/* Right sidebar for editing selected layer */}
+      {selectedLayer && (
+        <div className="w-64 bg-white p-4 shadow-md overflow-auto">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">Edit Layer</h2>
+            <Button onClick={closeEditLayer} size="sm" variant="ghost">
+              <X size={20} />
+            </Button>
+          </div>
+          {selectedLayer.type === 'text' && (
+            <>
+              {/* Text content input */}
+              <Input 
+                value={selectedLayer.content} 
+                onChange={(e) => handleLayerEdit(selectedLayer.id, { content: e.target.value })}
+                className="mb-2"
+                onFocus={(e) => e.target.select()}
+              />
+              {/* Font size selector */}
+              <Select 
+                onValueChange={(value) => handleLayerEdit(selectedLayer.id, { fontSize: parseInt(value) })}
+                defaultValue={selectedLayer.fontSize.toString()}
+              >
+                <SelectTrigger className="w-full mb-2">
+                  <SelectValue placeholder="Font Size" />
+                </SelectTrigger>
+                <SelectContent>
+                  {[12, 14, 16, 18, 20, 24, 28, 32, 36].map(size => (
+                    <SelectItem key={size} value={size.toString()}>{size}px</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Text color picker */}
+              <Input 
+                type="color" 
+                value={selectedLayer.color} 
+                onChange={(e) => handleLayerEdit(selectedLayer.id, { color: e.target.value })}
+                className="w-full mb-2"
+              />
+            </>
+          )}
+          {selectedLayer.type === 'image' && (
+            <p>Image editing options coming soon!</p>
+          )}
+        </div>
+      )}
+
+      {/* Hidden canvas for downloading artwork */}
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+    </div>
+  );
+};
+
+export default MusicArtworkApp;
