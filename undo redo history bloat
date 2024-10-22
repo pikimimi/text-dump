@@ -1,0 +1,1113 @@
+"use client";
+
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Camera, Linkedin, Github, Instagram, Music } from 'lucide-react';
+import html2canvas from 'html2canvas';
+
+// Interfaces
+interface Layer {
+  id: number;
+  type: 'text' | 'image';
+  content: string;
+  position: { x: number; y: number };
+  fontSize: number;
+  fontFamily?: string;
+  color: string;
+  visible: boolean;
+  zIndex: number;
+  size?: { width: number; height: number };
+  isEditing?: boolean;
+  rotation: number;
+  isResizing?: boolean;
+  resizeCorner?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
+  aspectRatio?: number;
+  initialCreation?: boolean; // New flag to track if this is a fresh layer
+}
+
+interface Artwork {
+  background: string;
+  layers: Layer[];
+}
+
+interface Template {
+  id: number;
+  name: string;
+  background: string;
+}
+
+interface MusicMetadata {
+  title: string;
+  artist: string;
+  album: string;
+}
+
+// Add the new history management code
+interface HistoryEntry {
+  id: number;
+  name: string;
+  state: {
+    artwork: Artwork;
+    selectedLayer: Layer | null;
+  };
+  timestamp: string;
+}
+
+const useHistoryManager = () => {
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [currentIndex, setCurrentIndex] = useState<number>(-1);
+
+  const addToHistory = useCallback((actionName: string, artwork: Artwork, selectedLayer: Layer | null) => {
+    const newEntry: HistoryEntry = {
+      id: Date.now(),
+      name: actionName,
+      state: {
+        artwork: JSON.parse(JSON.stringify(artwork)),
+        selectedLayer: selectedLayer ? JSON.parse(JSON.stringify(selectedLayer)) : null
+      },
+      timestamp: new Date().toLocaleTimeString()
+    };
+
+    setHistoryEntries(prev => {
+      const newHistory = prev.slice(0, currentIndex + 1);
+      return [...newHistory, newEntry];
+    });
+    
+    setCurrentIndex(prev => prev + 1);
+  }, [currentIndex]);
+
+  const goToHistoryState = useCallback((index: number) => {
+    if (index >= 0 && index < historyEntries.length) {
+      setCurrentIndex(index);
+      return historyEntries[index].state;
+    }
+    return null;
+  }, [historyEntries]);
+
+  const undo = useCallback(() => {
+    return goToHistoryState(currentIndex - 1);
+  }, [currentIndex, goToHistoryState]);
+
+  const redo = useCallback(() => {
+    return goToHistoryState(currentIndex + 1);
+  }, [currentIndex, goToHistoryState]);
+
+  // Updated History Panel Component with matching styles
+  const HistoryPanel: React.FC<{ setArtwork: React.Dispatch<React.SetStateAction<Artwork>>, setSelectedLayer: React.Dispatch<React.SetStateAction<Layer | null>> }> = ({ setArtwork, setSelectedLayer }) => (
+    <div className="fixed right-4 top-16 w-64 bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-gray-700 border-b border-gray-600">
+        <span className="text-sm font-medium text-gray-200">History</span>
+        <div className="flex space-x-2">
+          <button 
+            onClick={undo}
+            disabled={currentIndex <= 0}
+            className={`text-xs px-2 py-1 rounded ${currentIndex > 0 ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-700 opacity-50'} text-white`}
+          >
+            Undo
+          </button>
+          <button 
+            onClick={redo}
+            disabled={currentIndex >= historyEntries.length - 1}
+            className={`text-xs px-2 py-1 rounded ${currentIndex < historyEntries.length - 1 ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-700 opacity-50'} text-white`}
+          >
+            Redo
+          </button>
+        </div>
+      </div>
+      <div className="max-h-96 overflow-y-auto">
+        {historyEntries.map((entry, index) => (
+          <div
+            key={entry.id}
+            onClick={() => {
+              const state = goToHistoryState(index);
+              if (state) {
+                const newSelectedLayer = state.selectedLayer as Layer | null;
+                setArtwork(state.artwork);
+                setSelectedLayer(newSelectedLayer);
+              }
+            }}
+            className={`
+              flex items-center justify-between px-4 py-2 cursor-pointer
+              ${index === currentIndex ? 'bg-gray-700' : 'hover:bg-gray-700'}
+              border-b border-gray-700 last:border-0
+            `}
+          >
+            <div className="flex items-center space-x-2">
+              <div 
+                className={`w-2 h-2 rounded-full ${
+                  index === currentIndex ? 'bg-purple-500' : 'bg-gray-500'
+                }`}
+              />
+              <span className="text-sm text-gray-300">{entry.name}</span>
+            </div>
+            <span className="text-xs text-gray-500">{entry.timestamp}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  return {
+    addToHistory,
+    undo,
+    redo,
+    HistoryPanel,
+    canUndo: currentIndex > 0,
+    canRedo: currentIndex < historyEntries.length - 1
+  };
+};
+
+// Main Component
+const MusicArtworkApp: React.FC = () => {
+  const initialArtwork = {
+    background: '#ffffff',
+    layers: [],
+  };
+
+  // State
+  const [artwork, setArtwork] = useState<Artwork>(initialArtwork);
+  const [isBorderVisible, setIsBorderVisible] = useState<boolean>(true);
+  const [borderColor, setBorderColor] = useState<string>('#E6A8D7');
+  const [selectedLayer, setSelectedLayer] = useState<Layer | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isRotating, setIsRotating] = useState<boolean>(false);
+  const [rotationStart, setRotationStart] = useState<number>(0);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [hoveredLayer, setHoveredLayer] = useState<number | null>(null);
+  const [isResizing, setIsResizing] = useState<boolean>(false);
+  const [resizeCorner, setResizeCorner] = useState<string>('');
+  const [initialSize, setInitialSize] = useState<{ width: number; height: number } | null>(null);
+  const [templates] = useState<Template[]>([
+    { id: 1, name: 'Minimal', background: '#f0f0f0' },
+    { id: 2, name: 'Vibrant', background: '#ff4500' },
+    { id: 3, name: 'Dark', background: '#1a1a1a' },
+  ]);
+  const [musicMetadata, setMusicMetadata] = useState<MusicMetadata>({
+    title: '',
+    artist: '',
+    album: '',
+  });
+  const [aiPrompt, setAiPrompt] = useState<string>('');
+  const [imageCounter, setImageCounter] = useState<number>(0);
+  const [editingText, setEditingText] = useState<string>('');
+  const [isCenterCircleVisible, setIsCenterCircleVisible] = useState<boolean>(true);
+  const [centerCircleColor, setCenterCircleColor] = useState<string>('#000000');
+  const [centerCircleSize, setCenterCircleSize] = useState<number>(20);
+  const [customFonts, setCustomFonts] = useState<{ name: string; url: string }[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fontInputRef = useRef<HTMLInputElement>(null);
+  const artworkContainerRef = useRef<HTMLDivElement>(null);
+  
+  const { addToHistory, undo, redo, HistoryPanel, canUndo, canRedo } = useHistoryManager();
+
+  // Add these functions inside your MusicArtworkApp component, before the return statement
+
+  const addLayer = (type: 'text' | 'image', content: string, aspectRatio?: number) => {
+    const newLayer: Layer = {
+      id: Date.now(),
+      type,
+      content: type === 'text' ? 'New Text' : content,
+      position: { x: 230, y: 230 },
+      fontSize: 16,
+      color: '#000000',
+      visible: true,
+      zIndex: artwork.layers.length,
+      size: type === 'image' ? { width: 100, height: 100 } : { width: 100, height: 50 },
+      isEditing: type === 'text',
+      rotation: 0,
+      aspectRatio,
+      initialCreation: true
+    };
+    
+    const newArtwork = {
+      ...artwork,
+      layers: [...artwork.layers, newLayer]
+    };
+    
+    setArtwork(newArtwork);
+    setSelectedLayer(newLayer);
+    addToHistory(`Added ${type}`, newArtwork, newLayer);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const aspectRatio = img.width / img.height;
+          setImageCounter(prev => prev + 1);
+          
+          const newLayer: Layer = {
+            id: Date.now(),
+            type: 'image',
+            content: event.target?.result as string,
+            position: { x: 230, y: 230 },
+            size: { width: 100, height: 100 },
+            visible: true,
+            zIndex: artwork.layers.length,
+            rotation: 0,
+            aspectRatio,
+            fontSize: 16,
+            color: '#000000',
+          };
+
+          const newArtwork = {
+            ...artwork,
+            layers: [...artwork.layers, newLayer]
+          };
+          
+          setArtwork(newArtwork);
+          setSelectedLayer(newLayer);
+          addToHistory('Added image', newArtwork, newLayer);
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleFontUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const fontName = file.name.split('.')[0];
+        const fontUrl = event.target?.result as string;
+        const newFont = new FontFace(fontName, `url(${fontUrl})`);
+        newFont.load().then((loadedFont) => {
+          document.fonts.add(loadedFont);
+          setCustomFonts(prev => [...prev, { name: fontName, url: fontUrl }]);
+        }).catch((error) => {
+          console.error('Error loading font:', error);
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleTextEdit = (e: React.ChangeEvent<HTMLInputElement>, layerId: number) => {
+    const layer = artwork.layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    const newContent = e.target.value;
+    const updatedLayer: Layer = { ...layer, content: newContent };
+    
+    const updatedArtwork: Artwork = {
+      ...artwork,
+      layers: artwork.layers.map(l =>
+        l.id === layerId ? updatedLayer : l
+      )
+    };
+
+    setArtwork(updatedArtwork);
+    setSelectedLayer(updatedLayer);
+    addToHistory('Edited text', updatedArtwork, updatedLayer);
+  };
+
+  const startEditingText = (layer: Layer) => {
+    const updatedLayer: Layer = { ...layer, isEditing: true };
+    setSelectedLayer(updatedLayer);
+    setEditingText(layer.content);
+    const updatedArtwork = {
+      ...artwork,
+      layers: artwork.layers.map(l =>
+        l.id === layer.id ? updatedLayer : l
+      )
+    };
+    setArtwork(updatedArtwork);
+    addToHistory('Started editing text', updatedArtwork, updatedLayer);
+  };
+
+  const stopEditingText = (layerId: number) => {
+    const layer = artwork.layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    const updatedLayer: Layer = { ...layer, isEditing: false };
+    const updatedArtwork = {
+      ...artwork,
+      layers: artwork.layers.map(l =>
+        l.id === layerId ? updatedLayer : l
+      )
+    };
+    setArtwork(updatedArtwork);
+    setSelectedLayer(updatedLayer);
+    addToHistory('Stopped editing text', updatedArtwork, updatedLayer);
+  };
+
+  const handleLayerVisibilityToggle = (id: number) => {
+    const layer = artwork.layers.find(l => l.id === id);
+    if (layer) {
+      const updatedLayer: Layer = { ...layer, visible: !layer.visible };
+      const updatedArtwork = {
+        ...artwork,
+        layers: artwork.layers.map(l =>
+          l.id === id ? updatedLayer : l
+        )
+      };
+      setArtwork(updatedArtwork);
+      setSelectedLayer(updatedLayer);
+      addToHistory(`${layer.visible ? 'Hid' : 'Showed'} layer`, updatedArtwork, updatedLayer);
+    }
+  };
+
+  const handleLayerDelete = (id: number) => {
+    const updatedArtwork = {
+      ...artwork,
+      layers: artwork.layers.filter(layer => layer.id !== id)
+    };
+    setArtwork(updatedArtwork);
+    setSelectedLayer(null);
+    addToHistory('Deleted layer', updatedArtwork, null);
+  };
+
+  const handleAIAssist = () => {
+    if (aiPrompt.trim() !== '') {
+      addLayer('text', aiPrompt);
+      setAiPrompt('');
+    }
+  };
+
+  const applyTemplate = (template: Template) => {
+    const updatedArtwork = {
+      ...artwork,
+      background: template.background
+    };
+    setArtwork(updatedArtwork);
+    addToHistory(`Applied ${template.name} template`, updatedArtwork, selectedLayer);
+  };
+
+  const triggerFileInput = () => {
+    fileInputRef.current?.click();
+  };
+
+  const triggerFontInput = () => {
+    fontInputRef.current?.click();
+  };
+
+  const renderResizeHandles = (layer: Layer) => {
+    if (hoveredLayer !== layer.id) return null;
+
+    return ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'].map(corner => (
+      <div
+        key={corner}
+        className="resize-handle"
+        style={{
+          position: 'absolute',
+          [corner.includes('top') ? 'top' : 'bottom']: '-5px',
+          [corner.includes('Left') ? 'left' : 'right']: '-5px',
+          width: '10px',
+          height: '10px',
+          backgroundColor: 'white',
+          border: '1px solid black',
+          cursor: `${corner === 'topLeft' || corner === 'bottomRight' ? 'nwse' : 'nesw'}-resize`,
+          borderRadius: '50%',
+          zIndex: 1000,
+        }}
+        onMouseDown={(e) => handleMouseDown(e, layer, false, corner as any)}
+      />
+    ));
+  };
+
+  const downloadArtwork = () => {
+    const artworkElement = document.getElementById('artwork-container');
+    if (!artworkElement) return;
+
+    html2canvas(artworkElement, {
+      scale: 2,
+      backgroundColor: null,
+      useCORS: true,
+    }).then(canvas => {
+      const size = Math.max(canvas.width, canvas.height);
+      const squareCanvas = document.createElement('canvas');
+      squareCanvas.width = size;
+      squareCanvas.height = size;
+      const ctx = squareCanvas.getContext('2d');
+
+      if (ctx) {
+        if (isBorderVisible) {
+          ctx.fillStyle = borderColor;
+          ctx.fillRect(0, 0, size, size);
+          
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, size / 2 - 20, 0, Math.PI * 2);
+          ctx.clip();
+        }
+
+        const x = (size - canvas.width) / 2;
+        const y = (size - canvas.height) / 2;
+        ctx.drawImage(canvas, x, y);
+
+        if (isBorderVisible) {
+          ctx.globalCompositeOperation = 'destination-in';
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, size / 2 - 20, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        if (isCenterCircleVisible) {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.fillStyle = centerCircleColor;
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, size / 2 - 20, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      const link = document.createElement('a');
+      link.href = squareCanvas.toDataURL('image/png');
+      link.download = 'artwork.png';
+      link.click();
+    });
+  };
+
+  const calculateRotation = (e: React.MouseEvent, layer: Layer) => {
+    if (!artworkContainerRef.current) return 0;
+    const rect = artworkContainerRef.current.getBoundingClientRect();
+    const centerX = rect.left + layer.position.x + (layer.size?.width || 0) / 2;
+    const centerY = rect.top + layer.position.y + (layer.size?.height || 0) / 2;
+    const angle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI);
+    return angle;
+  };
+
+  const handleMouseDown = useCallback((e: React.MouseEvent, layer: Layer, isRotateHandle: boolean = false, resizeCorner?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight') => {
+    e.stopPropagation();
+    setSelectedLayer(layer);
+    
+    if (isRotateHandle) {
+      setIsRotating(true);
+      setRotationStart(calculateRotation(e, layer));
+    } else if (resizeCorner) {
+      setIsResizing(true);
+      setResizeCorner(resizeCorner);
+      setInitialSize(layer.size || { width: 100, height: 100 });
+      const rect = artworkContainerRef.current?.getBoundingClientRect();
+      if (rect) {
+        setDragStart({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        });
+      }
+    } else if (e.target instanceof HTMLElement && 
+              (e.target.tagName === 'IMG' || 
+               (e.target.tagName === 'P' && !layer.isEditing))) {
+      setIsDragging(true);
+      const rect = artworkContainerRef.current?.getBoundingClientRect();
+      if (rect) {
+        setDragStart({
+          x: e.clientX - rect.left - layer.position.x,
+          y: e.clientY - rect.top - layer.position.y
+        });
+      }
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!artworkContainerRef.current || !selectedLayer || !dragStart) return;
+    
+    const rect = artworkContainerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    if (isDragging) {
+      const newX = mouseX - dragStart.x;
+      const newY = mouseY - dragStart.y;
+      
+      const updatedArtwork = {
+        ...artwork,
+        layers: artwork.layers.map(layer =>
+          layer.id === selectedLayer.id
+            ? { ...layer, position: { x: newX, y: newY } }
+            : layer
+        )
+      };
+      
+      setArtwork(updatedArtwork);
+      addToHistory('Moved layer', updatedArtwork, selectedLayer);
+    } else if (isRotating) {
+      const currentAngle = calculateRotation(e, selectedLayer);
+      const newRotation = (selectedLayer.rotation + (currentAngle - rotationStart)) % 360;
+      
+      const updatedArtwork = {
+        ...artwork,
+        layers: artwork.layers.map(layer =>
+          layer.id === selectedLayer.id
+            ? { ...layer, rotation: newRotation }
+            : layer
+        )
+      };
+      setArtwork(updatedArtwork);
+      setRotationStart(currentAngle);
+      addToHistory('Rotated layer', updatedArtwork, selectedLayer);
+    } else if (isResizing && initialSize && selectedLayer.size) {
+      const deltaX = mouseX - dragStart.x;
+      const deltaY = mouseY - dragStart.y;
+      let newWidth = initialSize.width;
+      let newHeight = initialSize.height;
+      
+      // Resize logic here...
+      
+      const updatedArtwork = {
+        ...artwork,
+        layers: artwork.layers.map(layer =>
+          layer.id === selectedLayer.id
+            ? { ...layer, size: { width: newWidth, height: newHeight } }
+            : layer
+        )
+      };
+      setArtwork(updatedArtwork);
+      addToHistory('Resized layer', updatedArtwork, selectedLayer);
+    }
+  }, [isDragging, isRotating, isResizing, selectedLayer, dragStart, rotationStart, initialSize, addToHistory]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setIsRotating(false);
+    setIsResizing(false);
+    setDragStart(null);
+    setInitialSize(null);
+  }, []);
+
+  const handleBorderColorChange = (newColor: string) => {
+    const updatedArtwork = {
+      ...artwork,
+      borderColor: newColor
+    };
+    setArtwork(updatedArtwork);
+    addToHistory('Changed border color', updatedArtwork, selectedLayer);
+  };
+
+  const handleCenterCircleColorChange = (newColor: string) => {
+    const updatedArtwork = {
+      ...artwork,
+      centerCircleColor: newColor
+    };
+    setArtwork(updatedArtwork);
+    addToHistory('Changed center circle color', updatedArtwork, selectedLayer);
+  };
+
+  const handleCenterCircleSizeChange = (newSize: number) => {
+    const updatedArtwork = {
+      ...artwork,
+      centerCircleSize: newSize
+    };
+    setArtwork(updatedArtwork);
+    addToHistory('Changed center circle size', updatedArtwork, selectedLayer);
+  };
+
+  const handleBorderVisibilityToggle = () => {
+    const updatedArtwork = {
+      ...artwork,
+      isBorderVisible: !isBorderVisible
+    };
+    setArtwork(updatedArtwork);
+    addToHistory(`${isBorderVisible ? 'Hid' : 'Showed'} border`, updatedArtwork, selectedLayer);
+  };
+
+  const handleCenterCircleVisibilityToggle = () => {
+    const updatedArtwork = {
+      ...artwork,
+      isCenterCircleVisible: !isCenterCircleVisible
+    };
+    setArtwork(updatedArtwork);
+    addToHistory(`${isCenterCircleVisible ? 'Hid' : 'Showed'} center circle`, updatedArtwork, selectedLayer);
+  };
+
+  // First fix: Update the font selection handler
+  const handleFontFamilyChange = (value: string) => {
+    if (selectedLayer) {
+      const updatedArtwork = {
+        ...artwork,
+        layers: artwork.layers.map(layer =>
+          layer.id === selectedLayer.id
+            ? { ...layer, fontFamily: value }
+            : layer
+        )
+      };
+      setArtwork(updatedArtwork);
+      setSelectedLayer({ ...selectedLayer, fontFamily: value });
+      addToHistory('Changed font family', updatedArtwork, selectedLayer);
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-900">
+      <div className="w-64 bg-gray-800 p-4 flex flex-col">
+        <h2 className="text-xl font-bold mb-4 text-white">Tools</h2>
+        <Tabs defaultValue="elements" className="w-full">
+          <TabsList className="grid w-full grid-cols-4 mb-4">
+            <TabsTrigger value="elements" className="bg-gray-700 text-white text-xs p-1">Elements</TabsTrigger>
+            <TabsTrigger value="templates" className="bg-gray-700 text-white text-xs p-1">Templates</TabsTrigger>
+            <TabsTrigger value="layers" className="bg-gray-700 text-white text-xs p-1">Layers</TabsTrigger>
+            <TabsTrigger value="metadata" className="bg-gray-700 text-white text-xs p-1">Metadata</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="elements" className="space-y-2">
+            <Button className="w-full bg-gray-700 text-white" onClick={() => addLayer('text', 'New Text')}>
+              Add Text
+            </Button>
+            <Button className="w-full bg-gray-700 text-white" onClick={triggerFileInput}>
+              <Camera className="mr-2 h-4 w-4" /> Upload Image
+            </Button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleImageUpload}
+              accept="image/*"
+              style={{ display: 'none' }}
+            />
+            <Button className="w-full bg-gray-700 text-white" onClick={triggerFontInput}>
+              Upload Font
+            </Button>
+            <input
+              type="file"
+              ref={fontInputRef}
+              onChange={handleFontUpload}
+              accept=".ttf,.woff,.woff2"
+              style={{ display: 'none' }}
+            />
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="w-full bg-gray-700 text-white">
+                  Background Color
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Choose Background Color</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Input 
+                          // Start of Selection
+                          type="color" 
+                          value={artwork.background} 
+                          onChange={(e) => setArtwork({ ...artwork, background: e.target.value })} 
+                          className="w-full"
+                        />
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogAction>Close</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="w-full bg-gray-700 text-white">
+                  Border Color
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Choose Border Color</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Input 
+                      type="color" 
+                      value={borderColor} 
+                      onChange={(e) => handleBorderColorChange(e.target.value)} 
+                      className="w-full"
+                    />
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogAction>Close</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+                // Start of Selection
+                </AlertDialog>
+
+            <Button className="w-full bg-gray-700 text-white" onClick={handleBorderVisibilityToggle}>
+              {isBorderVisible ? 'Hide Border' : 'Show Border'}
+            </Button>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="w-full bg-gray-700 text-white">
+                  Center Circle Color
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Choose Center Circle Color</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <Input 
+                      type="color" 
+                      value={centerCircleColor} 
+                      onChange={(e) => handleCenterCircleColorChange(e.target.value)} 
+                      className="w-full"
+                    />
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogAction>Close</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <Select 
+              onValueChange={(value) => handleCenterCircleSizeChange(parseInt(value))}
+              defaultValue={centerCircleSize.toString()}
+            >
+              <SelectTrigger className="w-full bg-gray-700 text-white">
+                <SelectValue placeholder="Center Circle Size" />
+              </SelectTrigger>
+              <SelectContent>
+                {[10, 15, 20, 25, 30, 35, 40].map(size => (
+                  <SelectItem key={size} value={size.toString()}>{size}px</SelectItem>
+                ))}
+              </SelectContent>
+                // Start of Selection
+                </Select>
+    
+                <Button className="w-full bg-gray-700 text-white" onClick={() => setIsCenterCircleVisible(!isCenterCircleVisible)}>
+                  {isCenterCircleVisible ? 'Hide Center Circle' : 'Show Center Circle'}
+                </Button>
+    
+                <Input 
+              placeholder="Enter AI prompt"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              className="mb-2 bg-gray-700 text-white"
+            />
+            <Button className="w-full bg-gray-700 text-white" onClick={handleAIAssist}>
+              AI Assist
+            </Button>
+          </TabsContent>
+
+          <TabsContent value="templates" className="space-y-2">
+            {templates.map(template => (
+              <Button key={template.id} className="w-full bg-gray-700 text-white mb-2" onClick={() => applyTemplate(template)}>
+                {template.name}
+              </Button>
+            ))}
+          </TabsContent>
+
+          <TabsContent value="metadata" className="space-y-4">
+            <Input 
+              placeholder="Song Title" 
+              value={musicMetadata.title}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, title: e.target.value }))}
+              className="bg-gray-700 text-white"
+            />
+            <Input 
+              placeholder="Artist Name" 
+              value={musicMetadata.artist}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, artist: e.target.value }))}
+              className="bg-gray-700 text-white"
+            />
+            <Input 
+              placeholder="Album Name" 
+              value={musicMetadata.album}
+              onChange={(e) => setMusicMetadata(prev => ({ ...prev, album: e.target.value }))}
+              className="bg-gray-700 text-white"
+            />
+          </TabsContent>
+          
+          <TabsContent value="layers" className="space-y-2">
+            {artwork.layers.map(layer => (
+              <div key={layer.id} className="flex items-center justify-between bg-gray-700 p-2 rounded">
+                <span className="text-white">{layer.type === 'text' ? layer.content : `Image ${layer.id}`}</span>
+                <div className="flex space-x-2">
+                  <Button
+                    className="bg-gray-600 text-white p-1"
+                    onClick={() => handleLayerVisibilityToggle(layer.id)}
+                  >
+                    {layer.visible ? 'Hide' : 'Show'}
+                  </Button>
+                  <Button
+                    className="bg-red-600 text-white p-1"
+                    onClick={() => handleLayerDelete(layer.id)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </TabsContent>
+        </Tabs>
+
+        <div className="mt-auto space-y-2">
+          <Button className="w-full bg-gray-700 text-white" onClick={downloadArtwork}>
+            Download Artwork
+          </Button>
+          <Button className="w-full bg-gray-600 text-white" onClick={undo} disabled={!canUndo}>
+            Undo
+          </Button>
+          <Button className="w-full bg-gray-600 text-white" onClick={redo} disabled={!canRedo}>
+            Redo
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 p-4 flex flex-col justify-center items-center relative">
+        <div 
+          id="artwork-container"
+          ref={artworkContainerRef}
+          style={{ 
+            width: '500px', 
+            height: '500px', 
+            position: 'relative',
+            backgroundColor: isBorderVisible ? borderColor : 'transparent',
+            padding: isBorderVisible ? '20px' : '0',
+          }}
+          className="shadow-lg"
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              overflow: 'hidden',
+              borderRadius: isBorderVisible ? '50%' : '0',
+              backgroundColor: artwork.background,
+            }}
+          >
+            {artwork.layers.filter(layer => layer.visible).map(layer => (
+              <div
+                key={layer.id}
+                style={{
+                  position: 'absolute',
+                  left: `${layer.position.x}px`,
+                  top: `${layer.position.y}px`,
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  zIndex: layer.zIndex,
+                  transform: `rotate(${layer.rotation}deg)`,
+                }}
+                onMouseDown={(e) => handleMouseDown(e, layer)}
+                onMouseEnter={() => setHoveredLayer(layer.id)}
+                onMouseLeave={() => setHoveredLayer(null)}
+              >
+                {layer.type === 'text' ? (
+                  layer.isEditing ? (
+                    <input
+                      type="text"
+                      value={editingText}
+                      onChange={(e) => handleTextEdit(e, layer.id)}
+                      onBlur={() => stopEditingText(layer.id)}
+                      autoFocus
+                      style={{
+                        fontFamily: layer.fontFamily || 'inherit',
+                        fontSize: `${layer.fontSize}px`,
+                        color: layer.color,
+                        background: 'transparent',
+                        border: 'none',
+                        outline: 'none',
+                        width: `${layer.size?.width}px`,
+                        height: `${layer.size?.height}px`,
+                      }}
+                    />
+                  ) : (
+                    <div style={{ position: 'relative' }}>
+                      <p 
+                        style={{ 
+                          fontFamily: layer.fontFamily || 'inherit',
+                          fontSize: `${layer.fontSize}px`, 
+                          color: layer.color,
+                          margin: 0,
+                          padding: 0,
+                          cursor: 'move',
+                          userSelect: 'none',
+                        }}
+                        onClick={() => startEditingText(layer)}
+                      >
+                        {layer.content}
+                      </p>
+                      {renderResizeHandles(layer)}
+                      {hoveredLayer === layer.id && (
+                        <div
+                          className="rotate-handle"
+                          style={{
+                            position: 'absolute',
+                            top: '-20px',
+                            right: '-20px',
+                            width: '20px',
+                            height: '20px',
+                            borderRadius: '50%',
+                            backgroundColor: 'white',
+                            border: '2px solid #000',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            zIndex: 1000,
+                          }}
+                          onMouseDown={(e) => handleMouseDown(e, layer, true)}
+                        >
+                          ↻
+                        </div>
+                      )}
+                    </div>
+                  )
+                ) : (
+                  <div style={{ position: 'relative' }}>
+                    <img 
+                      src={layer.content} 
+                      alt={`Image ${layer.id}`} 
+                      style={{ 
+                        width: `${layer.size?.width}px`, 
+                        height: `${layer.size?.height}px`,
+                        userSelect: 'none',
+                      }} 
+                      draggable={false}
+                    />
+                    {renderResizeHandles(layer)}
+                    {hoveredLayer === layer.id && (
+                      <div
+                        className="rotate-handle"
+                        style={{
+                          position: 'absolute',
+                          top: '-20px',
+                          right: '-20px',
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '50%',
+                          backgroundColor: 'white',
+                          border: '2px solid #000',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          zIndex: 1000,
+                        }}
+                        onMouseDown={(e) => handleMouseDown(e, layer, true)}
+                      >
+                        ↻
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {isCenterCircleVisible && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  width: `${centerCircleSize}px`,
+                  height: `${centerCircleSize}px`,
+                  borderRadius: '50%',
+                  backgroundColor: centerCircleColor,
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 1000,
+                }}
+              />
+            )}
+          </div>
+        </div>
+
+        {selectedLayer && selectedLayer.type === 'text' && (
+          <div className="absolute top-4 right-4 bg-gray-800 p-4 rounded-lg shadow-lg">
+            <Select
+              value={selectedLayer.fontFamily || 'default'}
+              onValueChange={handleFontFamilyChange}
+            >
+              <SelectTrigger className="w-full bg-gray-700 text-white mb-2">
+                <SelectValue placeholder="Select Font" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default</SelectItem>
+                {customFonts.map((font) => (
+                  <SelectItem key={font.name} value={font.name}>{font.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              type="number"
+              placeholder="Font Size (px)"
+              value={selectedLayer.fontSize}
+              onChange={(e) => {
+                const updatedArtwork = {
+                  ...artwork,
+                  layers: artwork.layers.map(layer =>
+                    layer.id === selectedLayer.id
+                      ? { ...layer, fontSize: Number(e.target.value) }
+                      : layer
+                  )
+                };
+                setArtwork(updatedArtwork);
+                setSelectedLayer({ ...selectedLayer, fontSize: Number(e.target.value) });
+                addToHistory('Changed font size', updatedArtwork, selectedLayer);
+              }}
+              className="bg-gray-700 text-white mb-2"
+            />
+            <Input
+              type="color"
+              value={selectedLayer.color}
+              onChange={(e) => {
+                const updatedArtwork = {
+                  ...artwork,
+                  layers: artwork.layers.map(layer =>
+                    layer.id === selectedLayer.id
+                      ? { ...layer, color: e.target.value }
+                      : layer
+                  )
+                };
+                setArtwork(updatedArtwork);
+                setSelectedLayer({ ...selectedLayer, color: e.target.value });
+                addToHistory('Changed text color', updatedArtwork, selectedLayer);
+              }}
+              className="bg-gray-700 text-white"
+            />
+          </div>
+        )}
+
+        <div className="absolute bottom-4 left-4 text-purple-500 text-sm flex items-center space-x-2">
+          <span>built with love by Liam</span>
+          <a href="https://www.linkedin.com/in/your-linkedin-profile" target="_blank" rel="noopener noreferrer">
+            <Linkedin size={20} className="text-white hover:text-purple-500" />
+          </a>
+          <a href="https://github.com/your-github-profile" target="_blank" rel="noopener noreferrer">
+            <Github size={20} className="text-white hover:text-purple-500" />
+          </a>
+          <a href="https://www.instagram.com/leeyxmm/" target="_blank" rel="noopener noreferrer">
+            <Instagram size={20} className="text-white hover:text-purple-500" />
+          </a>
+          <a href="https://soundcloud.com/leeyxm" target="_blank" rel="noopener noreferrer">
+            <Music size={20} className="text-white hover:text-purple-500" />
+          </a>
+        </div>
+      </div>
+      <div className="absolute bottom-4 right-4 text-gray-400 text-xs">
+        <pre className="font-mono">
+          {`⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢲⢄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠄⠂⢉⠤⠐⠋⠈⠡⡈⠉⠐⠠⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⢀⡀⢠⣤⠔⠁⢀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢢⠀⠀⠈⠱⡤⣤⠄⣀⠀⠀⠀⠀
+⠀⠀⠰⠁⠀⣰⣿⠃⠀⢠⠃⢸⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠈⢞⣦⡀⠈⡇⠀⠀⠀
+⠀⠀⠀⢇⣠⡿⠁⠀⢀⡃⠀⣈⠀⠀⠀⠀⢰⡀⠀⠀⠀⠀⢢⠰⠀⠀⢺⣧⢰⠀⠀⠀⠀
+⠀⠀⠀⠈⣿⠁⡘⠀⡌⡇⠀⡿⠸⠀⠀⠀⠈⡕⡄⠀⠐⡀⠈⠀⢃⠀⠀⠾⠇⠀⠀⠀⠀
+⠀⠀⠀⠀⠇⡇⠃⢠⠀⠶⡀⡇⢃⠡⡀⠀⠀⠡⠈⢂⡀⢁⠀⡁⠸⠀⡆⠘⡀⠀⠀⠀⠀
+⠀⠀⠀⠸⠀⢸⠀⡗⣰⡿⡻⠿⡳⡅⠀⠀⠀⠀⠈⡵⠿⠿⡻⣷⡡⡇⡇⠀⢸⣇⠀⠀⠀
+⠀⠀⠀⠇⠀⢸⠀⡗⣰⡿⡻⠿⡳⡅⠀⠀⠀⠀⠈⡵⠿⠿⡻⣷⡡⡇⡇⠀⢸⣇⠀⠀⠀
+⠀⠀⢰⠀⠀⠀⠀⠟⠀⠀⢰⢁⡇⠇⠰⣀⢁⡜⠀⠀⠀⠀⠀⠀⠀⠤⠄⠀⢸⠃⠀⠀⠀⠀⠀⠃⠀
+⠀⡘⠀⠀⠀⠀⢊⣤⠀⠀⠤⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⢠⠁⢀⠀⠀⠀⠈⢿⡀⠀⠀⠀⠀⠀⠀⢀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⠀
+⠘⠸⠘⡀⠀⠀⠀⠀⢣⠀⠀⠀⠀⠀⠀⠁⠀⠃⠀⠀⠀⠀⢀⠎⠀⠀⠀⠀⠀⢠⠀⠀⡇
+⠀⠇⢆⢃⠀⠀⠀⠀⠀⡏⢲⢤⢀⡀⠀⠀⠀⠀⢀⣠⠄⡚⠀⠀⠀⠀⠀⠀⠀⣾⠀⠀⠀
+⢰⠈⢌⢎⢆⠀⠀⠀⠀⠁⣌⠆⡰⡁⠉⠉⠀⠉⠁⡱⡘⡼⠇⠀⠀⠀⠀⢀⢬⠃⢠⠀⡆
+⠀⢢⠀⠑⢵⣧⡀⠀⠀⡿⠳⠂⠉⠀⠀⠀⠀⠀⠀⠀⠤⠄⠀⢀⢠⣮⠃⢀⠆⡰⠀
+⠀⠀⠑⠄⣀⠙⡭⠢⢀⡀⠀⠁⠄⣀⣀⠀⢀⣀⣀⣀⣀⡠⠂⢃⡀⠔⠱⡞⢁⠄⠁⠀
+⠀⠀⠀⠀⠀⢠⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡇⠀⠀⠀⠀⠀`}
+        </pre>
+      </div>
+      <div className="absolute right-4 top-4">
+        <HistoryPanel setArtwork={setArtwork} setSelectedLayer={setSelectedLayer} />
+      </div>
+    </div>
+  );
+};
+
+export default MusicArtworkApp;
+  
